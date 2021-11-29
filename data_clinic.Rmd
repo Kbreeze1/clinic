@@ -1,0 +1,329 @@
+---
+title: "Data_Clinic"
+author: "GCP"
+institute: "浙江省人民医院GCP机构"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::downcute:
+    code_folding: show
+    self_contained: true
+    thumbnails: false
+    lightbox: true
+    gallery: true
+
+---
+```{r,include=FALSE}
+library("reticulate")
+use_condaenv('C:/ProgramData/anacod')
+py_config()
+repl_python()
+```
+
+# LUNG
+## Data
+```{python}
+import pandas as pd
+import numpy as np
+from  scipy.stats import chi2_contingency
+from scipy import stats
+import numpy as np
+#设置显示行数
+pd.set_option('display.max_rows', 200)
+#设置显示列数
+pd.set_option('display.max_columns', 200)
+data=pd.read_excel('E:/医学统计实习/肝癌/lung.xlsx')
+data1=data.loc[data['失访类型'] != 2,:]
+data1.iloc[:,:12].head()
+```
+
+data shape
+```{python}
+data1.shape
+```
+
+## Data Preprocessing
+miss_rate
+```{python}
+a=data1.apply(lambda x: sum(x.isnull())/len(x))
+a[a.values>0]
+```
+
+Missing value processing
+```{python}
+data1['BMI（kg/m^2）']=data1['BMI（kg/m^2）'].fillna(data1['BMI（kg/m^2）'].mean())
+#分类型数据用众数填补缺失值，连续性数据用均值填补缺失值
+data1['PS评分']=data1['PS评分'].fillna(data1['PS评分'].mode().values[0])
+data1['抽烟']=[i for i in data1['抽烟'].fillna(data1['抽烟'].mode().values[0]).values]
+data1['饮酒']=data1['饮酒'].fillna(data1['饮酒'].mode().values[0])
+b=data1.apply(lambda x: sum(x.isnull())/len(x))
+b[b.values>0]
+```
+
+## Table 1
+```{python}
+def T_Chisq_test():
+    data=data1
+    data_1=list(data.groupby(['病理诊断']))[0][1]#腺癌
+    data_2=list(data.groupby(['病理诊断']))[1][1]#鳞癌
+    col=data.columns[[1,4,5,7,9,11,15,17,70,71]]
+    Ac=[]
+    Scc=[]
+    p=[]
+    for i in range(len(col)):
+        if i in [1,2,6,7,8,9]:
+            mean1=np.round(np.mean(data_1.loc[:,col[i]]),2)
+            std1=np.round(np.std(data_1.loc[:,col[i]]),2)
+            mean2=np.round(np.mean(data_2.loc[:,col[i]]),2)
+            std2=np.round(np.std(data_2.loc[:,col[i]]),2)
+            Ac.append(str(mean1)+'('+str(std1)+')')
+            Scc.append(str(mean2)+'('+str(std2)+')')
+            p.append(np.round(stats.ttest_ind(data_1.loc[:,col[i]],data_2.loc[:,col[i]])[1],3))
+        else:
+            l=data_1.groupby(col[i])[col[i]].agg('count')
+            m=data_2.groupby(col[i])[col[i]].agg('count')
+            Ac.append(list(l))
+            Scc.append(list(m))
+            p.append(np.round(chi2_contingency(np.array([list(l),list(m)]))[1],3))
+    table=pd.DataFrame({'Demographics':col,'Adenocarcinoma':Ac,'Squamous cell carcinoma':Scc,'p_value':p}) 
+    return(table)
+print(T_Chisq_test())
+```
+
+## Lasso
+```{r}
+library(glmnet)
+#install.packages('glmnet')
+data=read.csv('E:/study_HZ/k_lung.csv')
+set.seed(1)
+out=glmnet(data[,15:86],data[,10],alpha=1)
+cv.out=cv.glmnet(data.matrix(data[,15:86]),data[,10],alpha=1)
+lasso.mod=glmnet(data[,15:86],data[,10],alpha=1)
+par(mfrow=c(2,1)) 
+plot(cv.out,family='serif')
+plot(lasso.mod,xlab='Penalty coefficient',family='serif')
+```
+
+## Multivariate Cox
+K-M曲线
+```{r}
+data_xian=data[data$lung=='adenocarcinoma',]
+data_lin=data[data$lung=='squamous cell carcinoma',]
+best_coef=c(9,10,8,22,25,26,27,35,37,40,44,45,48,57,59,64,68,69,71,74,83,86)
+#demo[2,best_coef]
+library(survival)
+library(survminer)
+#install.packages('survminer')
+
+coxdata1=data_xian[,best_coef]
+coxdata2=data_lin[,best_coef]
+fit1 <- survfit(Surv(生存期.月.,失访类型) ~ lung, data = data)
+
+ggsurvplot(fit1,palette = c('#E7B800', '#2E9FDF'),
+           data = data,
+           risk.table =TRUE,
+           pval =TRUE,
+           legend.title = '',
+           #conf.int =TRUE,
+           xlab ='Time (months)', 
+           ggtheme = theme_classic2())
+```
+
+腺癌
+```{r}
+res.cox1 <- coxph(Surv(生存期.月.,失访类型) ~., data =  coxdata1)
+summary(res.cox1)
+```
+
+鳞癌
+```{r}
+res.cox2 <- coxph(Surv(生存期.月.,失访类型) ~., data =  coxdata2)
+summary(res.cox2)
+```
+
+## Forest
+腺癌
+```{r}
+ggforest(res.cox1,data=coxdata1,main="hazard ratio",cpositions=c(0.02,0.22,0.4),fontsize=0.8,refLabel="reference")
+```
+
+鳞癌
+```{r}
+ggforest(res.cox2,data=coxdata2,main="hazard ratio",cpositions=c(0.02,0.22,0.4),fontsize=0.8,refLabel="reference")
+
+```
+
+## Roc
+```{r}
+library(survivalROC)
+Mayo= survivalROC(Stime=coxdata1$生存期.月.,
+                    status=coxdata1$失访类型,
+                    marker = coxdata1[,3],
+                    predict.time =30,
+                    method="KM")
+plot(Mayo$FP, Mayo$TP, type="l",
+       xlim=c(0,1), ylim=c(0,1),
+       xlab=paste( "FP", "\n", "AUC = ",round(Mayo$AUC,3)),
+       ylab="TP")
+
+```
+
+# MTHFR
+
+## Original Data
+```{r}
+#result data
+data1=read.csv('E:/医学统计实习/data1.csv')
+colnames(data1)=c('id','age','sex','hcy','mthfr')
+head(data1)
+```
+data1 shape
+```{r}
+dim(data1)
+```
+
+## Description Hcy
+```{r}
+hcy=data1$hcy
+hist(hcy,breaks=200)
+text(x=40,y=200,paste0('Hcy<15','   ',sum(ifelse(hcy<15,1,0)),
+                       '      ','Hcy>15','   ',sum(ifelse(hcy>15,1,0))))
+abline(v=15,lwd=1,col='red')
+```
+
+### Hcy and Age
+```{r}
+age=data1$age
+hcy=data1$hcy
+plot(age,hcy)
+mod=lm(hcy~age)
+abline(mod,col='red')
+```
+
+### Hcy and Sex (0-Woman  1-Man)
+```{r}
+#sex 0 Woman  1 Man
+library(ggplot2)
+sex=data1$sex
+data1$sex=as.factor(data1$sex)
+ggplot(data=data1)+
+  geom_boxplot(aes(x=sex,y=hcy,group=sex))
+```
+
+## Description Sex
+```{r}
+data2<-data.frame(Sample<-c('Woman','Man'), 
+                
+                 value<-c(table(data1$sex)[1],table(data1$sex)[2]))
+
+ggplot(data2,mapping = aes(Sample,value))+
+  geom_bar(stat='identity',position='dodge') +
+  geom_text(aes(label=value,y=value+10), position=position_dodge(0.9), vjust=0,family='serif')+
+  labs(x = '',y = '') +
+  theme(axis.title =element_text(size = 12),
+        axis.text =element_text(size = 12, color = 'black'))+
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.3))+
+  theme(text=element_text(family='serif'))
+```
+
+## Description Age
+```{r}
+age=data1$age
+age=as.data.frame(age)
+ggplot(data=age)+
+  geom_boxplot(aes(y=age))
+```
+
+## MTHFR Result
+### Plot
+```{r}
+mthfr=data1$mthfr
+data2<-data.frame(Sample<-c('CC','CT','TT'), 
+                 
+                 value<-c(table(mthfr)[1],table(mthfr)[2],table(mthfr)[3]))
+
+ggplot(data2,mapping = aes(Sample,value))+
+  geom_bar(stat='identity',position='dodge') +
+  geom_text(aes(label=value,y=value+10), position=position_dodge(0.9), vjust=0,family='serif')+
+  labs(x = '',y = '') +
+  theme(axis.title =element_text(size = 12),
+        axis.text =element_text(size = 12, color = 'black'))+
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.3))+
+  theme(text=element_text(family='serif'))
+```
+
+### MTHFR and Sex
+```{r}
+mthfr=data1$mthfr
+sex=data1$sex
+data4<-data.frame(Sample<-c('CC','CC','CT','CT','TT','TT'), 
+                  sex=rep(c('Woman','Man'),3),
+                  value<-c(table(mthfr,sex)[1,1]/sum(table(mthfr,sex)[1:3,1]),
+                          table(mthfr,sex)[1,2]/sum(table(mthfr,sex)[1:3,2]),
+                          table(mthfr,sex)[2,1]/sum(table(mthfr,sex)[1:3,1]),
+                          table(mthfr,sex)[2,2]/sum(table(mthfr,sex)[1:3,2]),
+                          table(mthfr,sex)[3,1]/sum(table(mthfr,sex)[1:3,1]),
+                          table(mthfr,sex)[3,2]/sum(table(mthfr,sex)[1:3,2])))
+
+ggplot(data4,mapping = aes(Sample,value,fill=sex))+
+  geom_bar(stat='identity',position='dodge') +
+  geom_text(aes(label=round(value,3),y=value+0.01), position=position_dodge(0.9), vjust=0,family='serif')+
+  labs(x = '',y = 'frequence') +
+  theme(axis.title =element_text(size = 12),
+        axis.text =element_text(size = 12, color = 'black'))+
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.3))+
+  theme(text=element_text(family='serif'))
+```
+
+### MTHFR (2-TT  1-CT  0-CC) and Hcy
+```{r}
+# mthfr 2 TT  1 CT  0 CC
+mthfr=data1$mthfr
+mthfr=as.character(mthfr)
+da=data.frame(mthfr,hcy)
+ggplot(data=da)+
+  geom_boxplot(aes(x=mthfr,y=hcy,group=mthfr))+
+  labs(x='')
+```
+
+
+## Linear Regression
+```{r}
+lr=lm(hcy~mthfr+age+sex,data1)
+summary(lr)
+```
+
+## Logistic Regression
+### mthfr classification
+```{r}
+hcy1=ifelse(data1$hcy>15,1,0)
+##dummy variable
+mthfr=data1$mthfr
+tt=c()
+ct=c()
+count1=0
+count2=0
+count3=0
+for (i in 1:length(mthfr)){
+  if(mthfr[i]==2){
+    tt[i]=1
+    ct[i]=0
+  }
+  if(mthfr[i]==1){
+    tt[i]=0
+    ct[i]=1
+  }
+  if(mthfr[i]==0){
+    tt[i]=0
+    ct[i]=0
+  }
+}
+pre=glm(hcy1~tt+ct+age+sex,family=binomial(link="logit"),data=data1)
+summary(pre)
+```
+
+### continual
+```{r}
+pre=glm(hcy1~mthfr+age+sex,family=binomial(link="logit"),data=data1)
+summary(pre)
+```
+
